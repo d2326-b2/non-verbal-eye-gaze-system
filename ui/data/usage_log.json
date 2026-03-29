@@ -1,0 +1,11 @@
+{
+  "Eat": 1,
+  "Drink": 0,
+  "Call Nurse": 1,
+  "Toilet": 4,
+  "Sleep": 2,
+  "Medicine": 0,
+  "Pain": 0,
+  "Fever": 0,
+  "Help": 1
+}
