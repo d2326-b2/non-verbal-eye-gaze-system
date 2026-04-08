@@ -16,7 +16,7 @@ import json, os, threading, time
 from datetime import datetime
 
 from eye.tts import speak  # Text-to-speech
-from alerts.email_alert import send_alert  # Email alert sending
+from alerts.alert import send_alert  # Alert sending
 from ui.stats_chart import show_stats_window  # Statistics window
 
 # 9 tasks: emoji, label, spoken phrase
@@ -81,7 +81,9 @@ class TaskGridApp:
         """Initialize the app window and UI components."""
         self.root        = root
         self.current_idx = 0              # Currently selected task
-        self.counts      = _load_counts() # Task usage counts
+        self.counts      = _load_counts() # Task usage counts (lifetime)
+        self.recent_counts = {t[1]: 0 for t in TASKS}  # Recent activity (session-based)
+        self.recent_selections = []       # Track recent selections for pattern analysis
         self._cards      = []             # Task card widgets
         self._card_emojis = []            # Emoji labels
         self._card_labels = []            # Task name labels
@@ -424,19 +426,33 @@ class TaskGridApp:
             w.config(bg="#dcfce7")
         self.root.after(600, lambda: self._highlight(self.current_idx))
 
-        # Increment count immediately (non-blocking)
-        self.counts[label] = self.counts.get(label, 0) + 1
+        # Update counts
+        self.counts[label] = self.counts.get(label, 0) + 1  # Lifetime count
+        
+        # Update recent activity (sliding window of last 20 selections)
+        self.recent_selections.append((label, time.time()))
+        if len(self.recent_selections) > 20:
+            self.recent_selections.pop(0)
+        
+        # Calculate recent counts (last 20 selections, but not older than 5 minutes)
+        current_time = time.time()
+        recent_window = [sel for sel, sel_time in self.recent_selections 
+                        if current_time - sel_time <= 300]  # 5 minutes
+        
+        self.recent_counts = {t[1]: 0 for t in TASKS}
+        for sel_label in recent_window:
+            self.recent_counts[sel_label] += 1
 
         # Do logging and alert sending in background thread to prevent UI freezing
         def _bg_tasks():
-            # Save count to disk
+            # Save lifetime count to disk
             _save_counts(self.counts)
             
-            # Send alert with cooldown (10 seconds between alerts for same task)
-            # This allows repeated alerts for continuous task selection but prevents doubles
+            # Send alert using RECENT activity patterns (not lifetime counts)
+            # This allows smart decisions based on current session behavior
             current_time = time.time()
             last_alert_time = self._alert_cooldowns.get(label, 0)
-            alert_cooldown = 10  # seconds - prevent double alerts on rapid selections
+            alert_cooldown = 30  # seconds - longer cooldown for recent-activity based alerts
             
             # Prevent concurrent alert sends for the same task
             if label in self._alert_sending:
@@ -444,10 +460,10 @@ class TaskGridApp:
                 return
             
             if current_time - last_alert_time >= alert_cooldown:
-                # Cooldown expired, safe to send alert
+                # Cooldown expired, safe to send alert based on recent patterns
                 self._alert_sending.add(label)  # Mark as sending
                 try:
-                    alert_sent = send_alert(label, spoken, self.counts)
+                    alert_sent = send_alert(label, spoken, self.recent_counts)
                     
                     # Update UI from main thread
                     ts = datetime.now().strftime("%H:%M:%S")
